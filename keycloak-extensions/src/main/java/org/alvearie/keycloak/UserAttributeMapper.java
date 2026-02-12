@@ -128,7 +128,7 @@ public class UserAttributeMapper extends AbstractOIDCProtocolMapper implements O
                                                         boolean multivalued, boolean aggregateAttrs) {
         ProtocolMapperModel mapper = OIDCAttributeMapperHelper.createClaimMapper(name, userAttribute,
                 tokenClaimName, claimType,
-                accessToken, idToken,
+                accessToken, idToken, true, false,
                 PROVIDER_ID);
 
         if (multivalued) {

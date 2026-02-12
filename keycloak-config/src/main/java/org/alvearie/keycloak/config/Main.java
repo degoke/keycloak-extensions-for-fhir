@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 */
 package org.alvearie.keycloak.config;
 
-import javax.ws.rs.BadRequestException;
+import jakarta.ws.rs.BadRequestException;
 
 import org.alvearie.keycloak.config.util.KeycloakConfig;
 import org.alvearie.keycloak.config.util.PropertyGroup;

@@ -43,8 +43,9 @@ public class KeycloakContainerTest {
     private static final String PASSWORD = "a";
     private static final String KC_CLIENT = "test";
     private static final String REDIRECT_URI = "http://localhost";
-    private static final String AUTH_ENDPOINT = "/auth/realms/test/protocol/openid-connect/auth";
-    private static final String TOKEN_ENDPOINT = "/auth/realms/test/protocol/openid-connect/token";
+    // Keycloak 26 Quarkus uses different path structure - no /auth prefix by default
+    private static final String AUTH_ENDPOINT = "/realms/test/protocol/openid-connect/auth";
+    private static final String TOKEN_ENDPOINT = "/realms/test/protocol/openid-connect/token";
     private static final String AUDIENCE = "https://localhost:9443/fhir-server/api/v4";
 
     // per https://www.testcontainers.org/features/networking/#exposing-host-ports-to-the-container
@@ -56,13 +57,21 @@ public class KeycloakContainerTest {
         Testcontainers.exposeHostPorts(mockFhirServer.getPort());
     }
 
-    // per the testcontainers doc, the contain should be started in a static block before JUnit starts up
+    // per the testcontainers doc, the container should be started in a static block before JUnit starts up
     private static KeycloakContainer keycloak;
     static {
-        keycloak = new KeycloakContainer().withExtensionClassesFrom("target/classes");
-        keycloak.addFileSystemBind("target/dependency", "/opt/jboss/keycloak/modules/system/layers/base/com/ibm/fhir/main", BindMode.READ_ONLY);
-        // Shouldn't be needed, but sometimes is: https://github.com/dasniko/testcontainers-keycloak/issues/15
-        keycloak.withEnv("DB_VENDOR", "H2");
+        keycloak = new KeycloakContainer("quay.io/keycloak/keycloak:26.0.8")
+                .withRealmImportFile("/test-realm.json") // Optional: import test realm
+                .withProviderClassesFrom("target/classes");
+        
+        // For Keycloak 26 Quarkus, providers go to /opt/keycloak/providers/
+        // Note: We use the shaded JAR which includes HAPI FHIR dependencies
+        keycloak.addFileSystemBind("target/keycloak-extensions-0.5.0-SNAPSHOT-shaded.jar", 
+                "/opt/keycloak/providers/keycloak-extensions.jar", BindMode.READ_ONLY);
+        
+        // Keycloak 26 Quarkus uses KC_DB instead of DB_VENDOR
+        keycloak.withEnv("KC_DB", "dev-file");
+        
         // Uncomment this to keep the container running after the tests complete
 //        keycloak.withReuse(true);
         keycloak.start();

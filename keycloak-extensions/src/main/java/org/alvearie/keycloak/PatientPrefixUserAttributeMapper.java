@@ -109,7 +109,7 @@ public class PatientPrefixUserAttributeMapper extends AbstractOIDCProtocolMapper
         boolean accessToken, boolean idToken,
         boolean multivalued, boolean aggregateAttrs) {
         ProtocolMapperModel mapper =
-                OIDCAttributeMapperHelper.createClaimMapper(name, userAttribute, tokenClaimName, claimType, accessToken, idToken, PROVIDER_ID);
+                OIDCAttributeMapperHelper.createClaimMapper(name, userAttribute, tokenClaimName, claimType, accessToken, idToken, true, false, PROVIDER_ID);
 
         if (multivalued) {
             mapper.getConfig().put(ProtocolMapperUtils.MULTIVALUED, "true");

@@ -14,8 +14,8 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.Response.Status.Family;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response.Status.Family;
 
 import org.alvearie.keycloak.config.util.KeycloakConfig;
 import org.alvearie.keycloak.config.util.PropertyGroup;
@@ -628,7 +628,7 @@ public class KeycloakConfigurator {
         for (String entry : jsonObject.keySet()) {
             PropertyGroup entryProps = authenticationExecutionsPg.getPropertyGroup(entry);
 
-            HashMap<String, String> executionParams = new HashMap<String, String>();
+            Map<String, Object> executionParams = new HashMap<>();
 
             String description = entryProps.getStringProperty("description");
             executionParams.put("description", description);
@@ -658,7 +658,7 @@ public class KeycloakConfigurator {
                         throw new UnsupportedOperationException("Nest subflows are not yet supported");
                     }
 
-                    HashMap<String, String> childExecutionParams = new HashMap<String, String>();
+                    Map<String, Object> childExecutionParams = new HashMap<>();
                     childExecutionParams.put("provider", authenticator);
                     AuthenticationExecutionInfoRepresentation childExecution = getOrCreateExecution(authMgmt, entry, displayName, childIsFlow, childExecutionParams);
 
@@ -730,7 +730,7 @@ public class KeycloakConfigurator {
     }
 
     private AuthenticationExecutionInfoRepresentation getOrCreateExecution(AuthenticationManagementResource authMgmt,
-            String flowAlias, String displayName, boolean isFlow, HashMap<String, String> executionParams) {
+            String flowAlias, String displayName, boolean isFlow, Map<String, Object> executionParams) {
         AuthenticationExecutionInfoRepresentation savedExecution = getExecutionByDisplayName(authMgmt, flowAlias, displayName);
         if (savedExecution == null) {
             if (isFlow) {

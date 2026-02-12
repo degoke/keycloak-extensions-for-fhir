@@ -8,7 +8,7 @@ package org.alvearie.keycloak;
 import java.util.Arrays;
 import java.util.List;
 
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response;
 
 import org.jboss.logging.Logger;
 import org.keycloak.authentication.AuthenticationFlowContext;

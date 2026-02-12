@@ -12,17 +12,11 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import javax.ws.rs.RuntimeType;
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 
 import org.alvearie.keycloak.freemarker.PatientStruct;
 import org.jboss.logging.Logger;
-import org.jboss.resteasy.client.jaxrs.ResteasyClientBuilder;
-import org.jboss.resteasy.util.HttpHeaderNames;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.authentication.Authenticator;
@@ -43,17 +37,18 @@ import org.keycloak.services.Urls;
 import org.keycloak.services.util.DefaultClientSessionContext;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
-import com.ibm.fhir.core.FHIRMediaType;
-import com.ibm.fhir.model.config.FHIRModelConfig;
-import com.ibm.fhir.model.resource.Bundle;
-import com.ibm.fhir.model.resource.Bundle.Entry;
-import com.ibm.fhir.model.resource.Patient;
-import com.ibm.fhir.model.type.Date;
-import com.ibm.fhir.model.type.HumanName;
-import com.ibm.fhir.model.type.Url;
-import com.ibm.fhir.model.type.code.BundleType;
-import com.ibm.fhir.model.type.code.HTTPVerb;
-import com.ibm.fhir.provider.FHIRProvider;
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.api.MethodOutcome;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import ca.uhn.fhir.rest.client.interceptor.BearerTokenAuthInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.BaseServerResponseException;
+import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.HumanName;
+import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Bundle.BundleEntryComponent;
+import org.hl7.fhir.r4.model.Bundle.BundleEntryRequestComponent;
+import org.hl7.fhir.r4.model.Bundle.BundleType;
+import org.hl7.fhir.r4.model.Bundle.HTTPVerb;
 
 /**
  * Present a patient context picker when the client requests the launch/patient scope and the
@@ -70,12 +65,10 @@ public class PatientSelectionForm implements Authenticator {
 
     private static final String ATTRIBUTE_RESOURCE_ID = "resourceId";
 
-    private Client fhirClient;
+    private FhirContext fhirContext;
 
     public PatientSelectionForm() {
-        FHIRModelConfig.setExtendedCodeableConceptValidation(false);
-        fhirClient = ResteasyClientBuilder.newClient()
-                .register(new FHIRProvider(RuntimeType.CLIENT));
+        fhirContext = FhirContext.forR4();
     }
 
     @Override
@@ -84,7 +77,7 @@ public class PatientSelectionForm implements Authenticator {
         ClientModel client = authSession.getClient();
 
         String requestedScopesString = authSession.getClientNote(OIDCLoginProtocol.SCOPE_PARAM);
-        Stream<ClientScopeModel> clientScopes = TokenManager.getRequestedClientScopes(requestedScopesString, client);
+        Stream<ClientScopeModel> clientScopes = TokenManager.getRequestedClientScopes(context.getSession(), requestedScopesString, client, context.getUser());
 
         if (clientScopes.noneMatch(s -> SMART_SCOPE_LAUNCH_PATIENT.equals(s.getName()))) {
             // no launch/patient scope == no-op
@@ -114,28 +107,17 @@ public class PatientSelectionForm implements Authenticator {
         }
 
         String accessToken = buildInternalAccessToken(context, resourceIds);
+        String fhirBaseUrl = config.getConfig().get(PatientSelectionFormFactory.INTERNAL_FHIR_URL_PROP_NAME);
 
         Bundle requestBundle = buildRequestBundle(resourceIds);
-        try (Response fhirResponse = fhirClient
-                .target(config.getConfig().get(PatientSelectionFormFactory.INTERNAL_FHIR_URL_PROP_NAME))
-                .request(MediaType.APPLICATION_JSON)
-                .header(HttpHeaderNames.AUTHORIZATION, "Bearer " + accessToken)
-                .post(Entity.entity(requestBundle, FHIRMediaType.APPLICATION_FHIR_JSON_TYPE))) {
-
-            if (fhirResponse.getStatus() != 200) {
-                String msg = "Error while retrieving Patient resources for the selection form";
-                LOG.warnf(msg);
-                LOG.warnf("Response with code " + fhirResponse.getStatus() + "%n%s", fhirResponse.readEntity(String.class));
-                context.failure(AuthenticationFlowError.INTERNAL_ERROR,
-                        Response.status(302)
-                        .header("Location", context.getAuthenticationSession().getRedirectUri() +
-                                "?error=server_error" +
-                                "&error_description=" + msg)
-                        .build());
-                return;
-            }
-
-            List<PatientStruct> patients = gatherPatientInfo(fhirResponse.readEntity(Bundle.class));
+        
+        try {
+            IGenericClient fhirClient = fhirContext.newRestfulGenericClient(fhirBaseUrl);
+            fhirClient.registerInterceptor(new BearerTokenAuthInterceptor(accessToken));
+            
+            Bundle responseBundle = fhirClient.transaction().withBundle(requestBundle).execute();
+            
+            List<PatientStruct> patients = gatherPatientInfo(responseBundle);
             if (patients.isEmpty()) {
                 succeed(context, resourceIds.get(0));
                 return;
@@ -150,6 +132,25 @@ public class PatientSelectionForm implements Authenticator {
 
                 context.challenge(response);
             }
+        } catch (BaseServerResponseException e) {
+            String msg = "Error while retrieving Patient resources for the selection form";
+            LOG.warnf(msg);
+            LOG.warnf("Response with status " + e.getStatusCode() + ": " + e.getMessage());
+            context.failure(AuthenticationFlowError.INTERNAL_ERROR,
+                    Response.status(302)
+                    .header("Location", context.getAuthenticationSession().getRedirectUri() +
+                            "?error=server_error" +
+                            "&error_description=" + msg)
+                    .build());
+        } catch (Exception e) {
+            String msg = "Unexpected error while retrieving Patient resources";
+            LOG.error(msg, e);
+            context.failure(AuthenticationFlowError.INTERNAL_ERROR,
+                    Response.status(302)
+                    .header("Location", context.getAuthenticationSession().getRedirectUri() +
+                            "?error=server_error" +
+                            "&error_description=" + msg)
+                    .build());
         }
     }
 
@@ -203,18 +204,19 @@ public class PatientSelectionForm implements Authenticator {
     }
 
     private Bundle buildRequestBundle(List<String> resourceIds) {
-        Bundle.Builder requestBuilder = Bundle.builder()
-                .type(BundleType.BATCH);
-        resourceIds.stream()
-                .map(id -> Entry.Request.builder()
-                        .method(HTTPVerb.GET)
-                        .url(Url.of("Patient/" + id))
-                        .build())
-                .map(request -> Entry.builder()
-                        .request(request)
-                        .build())
-                .forEach(entry -> requestBuilder.entry(entry));
-        return requestBuilder.build();
+        Bundle bundle = new Bundle();
+        bundle.setType(BundleType.BATCH);
+        
+        for (String id : resourceIds) {
+            BundleEntryComponent entry = new BundleEntryComponent();
+            BundleEntryRequestComponent request = new BundleEntryRequestComponent();
+            request.setMethod(HTTPVerb.GET);
+            request.setUrl("Patient/" + id);
+            entry.setRequest(request);
+            bundle.addEntry(entry);
+        }
+        
+        return bundle;
     }
 
     private void fail(AuthenticationFlowContext context, String msg) {
@@ -236,28 +238,31 @@ public class PatientSelectionForm implements Authenticator {
     private List<PatientStruct> gatherPatientInfo(Bundle fhirResponse) {
         List<PatientStruct> patients = new ArrayList<>();
 
-        for (Entry entry : fhirResponse.getEntry()) {
-            if (entry.getResponse() == null || !entry.getResponse().getStatus().hasValue() ||
-                    !entry.getResponse().getStatus().getValue().startsWith("200")) {
+        for (BundleEntryComponent entry : fhirResponse.getEntry()) {
+            if (entry.getResponse() == null || entry.getResponse().getStatus() == null ||
+                    !entry.getResponse().getStatus().startsWith("200")) {
                 continue;
             }
 
-            Patient patient = entry.getResource().as(Patient.class);
-
-            String patientId = patient.getId();
+            if (!(entry.getResource() instanceof Patient)) {
+                continue;
+            }
+            
+            Patient patient = (Patient) entry.getResource();
+            String patientId = patient.getIdElement().getIdPart();
 
             String patientName = "Missing Name";
             if (patient.getName().isEmpty()) {
-                LOG.warn("Patient[id=" + patient.getId() + "] has no name; using placeholder");
+                LOG.warn("Patient[id=" + patientId + "] has no name; using placeholder");
             } else {
                 if (patient.getName().size() > 1) {
-                    LOG.warn("Patient[id=" + patient.getId() + "] has multiple names; using the first one");
+                    LOG.warn("Patient[id=" + patientId + "] has multiple names; using the first one");
                 }
                 patientName = constructSimpleName(patient.getName().get(0));
             }
 
             String patientDOB = patient.getBirthDate() == null ? "missing"
-                    : Date.PARSER_FORMATTER.format(patient.getBirthDate().getValue());
+                    : patient.getBirthDate().toString();
 
             patients.add(new PatientStruct(patientId, patientName, patientDOB));
         }
@@ -266,13 +271,14 @@ public class PatientSelectionForm implements Authenticator {
     }
 
     private String constructSimpleName(HumanName name) {
-        if (name.getText() != null && name.getText().hasValue()) {
-            return name.getText().getValue();
+        if (name.hasText()) {
+            return name.getText();
         }
 
         return Stream.concat(name.getGiven().stream(), Stream.of(name.getFamily()))
-                .map(n -> n.getValue())
                 .filter(Objects::nonNull)
+                .map(Object::toString)
+                .filter(s -> !s.isEmpty())
                 .collect(Collectors.joining(" "));
     }
 
@@ -312,8 +318,6 @@ public class PatientSelectionForm implements Authenticator {
 
     @Override
     public void close() {
-        if (fhirClient != null) {
-            fhirClient.close();
-        }
+        // HAPI FHIR client doesn't need explicit cleanup
     }
 }

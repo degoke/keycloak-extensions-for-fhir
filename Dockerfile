@@ -5,21 +5,19 @@
 # ----------------------------------------------------------------------------
 
 # Build stage
-FROM maven:3-jdk-11-slim AS build
+FROM maven:3-eclipse-temurin-17 AS build
 COPY pom.xml ./
 COPY keycloak-config ./keycloak-config
-COPY jboss-fhir-provider ./jboss-fhir-provider
 COPY keycloak-extensions ./keycloak-extensions
 
 RUN mvn -B clean package -DskipTests
 
 
 # Package stage
-FROM quay.io/keycloak/keycloak:18.0.0-legacy
+FROM quay.io/keycloak/keycloak:26.0.8
 
-# This can be overridden, but without this I've found the db vendor-detection in Keycloak to be brittle
-ENV DB_VENDOR=H2
+# Use H2 database for development (can be overridden)
+ENV KC_DB=dev-file
 
-COPY --from=build keycloak-extensions/target/keycloak-extensions-*.jar /opt/jboss/keycloak/standalone/deployments/
-COPY --from=build jboss-fhir-provider/target/jboss-modules/ /opt/jboss/keycloak/modules/system/layers/base/
-RUN rm -rf /opt/jboss/keycloak/docs
+# Copy the shaded JAR with all dependencies to the providers directory
+COPY --from=build keycloak-extensions/target/keycloak-extensions-*-shaded.jar /opt/keycloak/providers/
